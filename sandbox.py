@@ -8,7 +8,8 @@
 
 The command and everything it starts can
 - read and execute only under the --ro and --rw paths,
-- write, create and delete only under the --rw paths, and use no device ioctls,
+- write, create and delete only under the --rw paths, and use no device ioctls (Landlock does
+  not cover file metadata: chmod, chown and utimes on files outside are not blocked),
 - open TCP connections only to the --tcp ports, and bind none; with no --tcp port
   it cannot create a socket of any family (so no UDP either),
 - create no Unix sockets unless --allow-unix is given (this is what keeps it off

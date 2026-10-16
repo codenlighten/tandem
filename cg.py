@@ -402,6 +402,10 @@ def find_skills(workspace):
     skills = {}
     for base in (os.path.join(HOME, ".claude", "skills"), os.path.join(workspace, ".claude", "skills")):
         for path in sorted(globlib.glob(os.path.join(base, "*", "SKILL.md"))):
+            # The user's own skills may be links; a project's must stay inside the project,
+            # since a repository can plant a link to a secret or to a whole directory.
+            if base.startswith(workspace) and not linked_inside(path, workspace):
+                continue
             name, desc = os.path.basename(os.path.dirname(path)), ""
             try:
                 with open(path, errors="replace") as f:
@@ -424,7 +428,7 @@ def project_instruction_files(workspace):
     while True:
         for name in ("CLAUDE.md", os.path.join(".claude", "CLAUDE.md"), "CLAUDE.local.md"):
             p = os.path.join(d, name)
-            if os.path.isfile(p):
+            if os.path.isfile(p) and (not inside_dir(p, workspace) or linked_inside(p, workspace)):
                 found.append(p)
         d = os.path.dirname(d)
         # Parents count only inside the home directory: a CLAUDE.md in /tmp is anyone's.
@@ -435,6 +439,42 @@ def project_instruction_files(workspace):
 
 def inside_home(path):
     return path == HOME or path.startswith(HOME + "/")
+
+
+def inside_dir(path, directory):
+    directory = os.path.realpath(directory)
+    path = os.path.abspath(path)
+    return path == directory or path.startswith(directory.rstrip(os.sep) + os.sep)
+
+
+def linked_inside(path, directory):
+    """True if `path` resolves, through any links, to a place inside `directory` that is not a
+    secret. A repository's links must not lead the harness (or the sandbox) out of it."""
+    real = os.path.realpath(path)
+    return inside_dir(real, directory) and not policy.is_secret(real)
+
+
+def broad_root(path):
+    """Too broad to grant for reading: /, a top-level directory, the home directory or any
+    parent of it."""
+    real = os.path.realpath(path)
+    return real.count("/") <= 1 or real == HOME or HOME.startswith(real.rstrip("/") + "/")
+
+
+def automatic_read_roots(workspace, names):
+    """Directories outside the workspace that links named in the config ("node_modules", a
+    venv) lead to, so the project's own tests can run. A link in a repository is data an agent
+    or a cloned project may have planted, so it never grants a secret location or a broad root;
+    those need an explicit --read."""
+    roots = []
+    for name in names:
+        link = os.path.join(workspace, name)
+        if os.path.islink(link) and os.path.isdir(link):
+            target = os.path.realpath(link)
+            if policy.inside(target, workspace) or policy.is_secret(target) or broad_root(target):
+                continue
+            roots.append(target)
+    return roots
 
 
 def read_text(path, limit=60000):
@@ -671,7 +711,8 @@ class Session:
         self.cgroup = cgroup_available()
         self.commands = 0
         self.memory = getattr(args, "memory_dir", None) or memory_dir(self.workspace)
-        skill_dirs = [os.path.realpath(os.path.dirname(p)) for _, p in self.skills.values()]
+        skill_dirs = [d for d in (os.path.realpath(os.path.dirname(p)) for _, p in self.skills.values())
+                      if not broad_root(d)]
         self.write_roots = [self.workspace, self.scratch]
         if cfg.get("memory_writable"):
             self.write_roots.append(self.memory)
@@ -680,19 +721,14 @@ class Session:
         # Dependencies kept outside the workspace and linked in (a shared node_modules, a venv
         # elsewhere) would be unreadable, and the project's own tests could not run. A link with
         # one of the configured names is followed; anything else needs --read.
-        self.extra_read = []
-        for name in cfg["sandbox"].get("linked_dirs", []):
-            link = os.path.join(self.workspace, name)
-            if os.path.islink(link) and os.path.isdir(link):
-                target = os.path.realpath(link)
-                if not policy.inside(target, self.workspace) and not policy.is_secret(target):
-                    self.extra_read.append(target)
+        self.extra_read = automatic_read_roots(self.workspace, cfg["sandbox"].get("linked_dirs", []))
         for path in getattr(args, "read", None) or []:
             target = os.path.realpath(os.path.expanduser(path))
             if not os.path.exists(target):
                 sys.exit(f"tandem: --read {path}: no such file or directory")
-            if policy.is_secret(target) or target in ("/", HOME):
-                sys.exit(f"tandem: --read {path}: refused (a secret location, / or the whole home directory)")
+            if policy.is_secret(target) or broad_root(target):
+                sys.exit(f"tandem: --read {path}: refused (a secret location, a top-level directory, "
+                         "the home directory or a parent of it)")
             self.extra_read.append(target)
         self.read_roots += self.extra_read
         self.secrets = secret_forms(workspace_secret_values(self.workspace) | {api_key()})

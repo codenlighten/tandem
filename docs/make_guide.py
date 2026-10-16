@@ -180,7 +180,7 @@ story = [
       "operating system, not by instructions the model could ignore. Every command the stand-in runs is confined "
       "by the Linux kernel:"),
     bullets([
-        "It can change files only inside the project and a private scratch folder.",
+        "It can write file contents only inside the project and a private scratch folder. (Linux does not stop it from changing permissions or timestamps of other files it can reach.)",
         "It cannot read your SSH keys, cloud credentials, or other projects.",
         "It has no network unless you start it with <font name=\"Mono\" size=\"8.6\">--net</font>, and then only "
         "web ports. It cannot reach Docker, databases on the machine, or other hosts.",
