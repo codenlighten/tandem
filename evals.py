@@ -556,6 +556,7 @@ class MultiStep:
         done_rc, _ = todo_cli(r.ws, new, "done", "1")
         with open(new) as f:
             stored = json.load(f)
+        bad_left = os.path.exists(bad)  # read before the directory is deleted
         shutil.rmtree(d, ignore_errors=True)
         run = subprocess.run("python3 -m unittest discover -s tests -t .", shell=True, cwd=r.ws,
                              capture_output=True, text=True)
@@ -566,7 +567,7 @@ class MultiStep:
                 ("old file lists as normal", [l.replace(" (done)", "") for l in old_listed]
                  == ["1 [normal] from before", "2 [normal] also old"]),
                 ("old file accepts a new item", add_rc == 0 and old_after[:1] == ["3 [high] fresh"]),
-                ("bad priority rejected, nothing stored", bad_rc != 0 and not os.path.exists(bad)),
+                ("bad priority rejected, nothing stored", bad_rc != 0 and not bad_left),
                 ("done still works", done_rc == 0 and stored[0]["done"] is True),
                 ("its own tests pass and there are more of them", run.returncode == 0 and bool(ran)
                  and int(ran.group(1)) > before["ran"]),

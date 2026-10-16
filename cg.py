@@ -1908,13 +1908,35 @@ check, not established fact: look at git status and the files it names before re
 then tell me in a few lines where things stand and continue from there."""
 
 
+def host_git_env(**extra):
+    """The environment for git run on the host, outside the sandbox. The workspace's own config
+    is data the agent may have edited: a clean filter, a textconv or external diff driver, a
+    hook or an fsmonitor command in it would run here, unsandboxed. So nothing from the user's
+    or the system's config is read, and callers add HOST_GIT to turn off what a repository's
+    config can name (git_tree goes further: it never reads the repository's config at all)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
+               GIT_CONFIG_NOSYSTEM="1", GIT_ATTR_NOSYSTEM="1", GIT_NO_LAZY_FETCH="1", **extra)
+    return env
+
+
+HOST_GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+            "-c", "diff.external=", "-c", "core.pager=cat"]
+
+
 def git_workspace(workspace):
     """Repository root, or None for a non-git workspace. Run git in the harness."""
-    r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=workspace,
+    r = subprocess.run(HOST_GIT + ["rev-parse", "--show-toplevel"], cwd=workspace, env=host_git_env(),
                        capture_output=True, text=True, timeout=30)
     if r.returncode:
         return None
-    return r.stdout.strip()
+    root = os.path.realpath(r.stdout.strip())
+    here = os.path.realpath(workspace)
+    # A core.worktree in the repository's config can point the root anywhere (a home
+    # directory, say); the root must be the workspace or one of its parents.
+    if here != root and not here.startswith(root.rstrip(os.sep) + os.sep):
+        return None
+    return root
 
 
 def git_tree(workspace):
@@ -1923,27 +1945,52 @@ def git_tree(workspace):
 
     The copy starts from the real index, not from empty: a file that is tracked although an
     ignore rule matches it (a force-added .env, say) is only seen by `git add -A` when the
-    index already knows it. Starting from empty silently left such files out."""
-    fd, index = tempfile.mkstemp(prefix="tandem-index-")
-    os.close(fd)
-    os.unlink(index)
-    env = dict(os.environ, GIT_INDEX_FILE=index, GIT_TERMINAL_PROMPT="0")
+    index already knows it. Starting from empty silently left such files out.
+
+    The repository's own config is never read by the commands that can run code: git runs in
+    a temporary git directory with an empty config that shares the real object store, so a
+    clean filter, fsmonitor command or hook planted in .git/config cannot run on the host.
+    (.gitattributes may still name a filter, but with no definition for it git does nothing.)"""
+    tmp = tempfile.mkdtemp(prefix="tandem-gitdir-")
     try:
-        real = subprocess.run(["git", "rev-parse", "--git-path", "index"], cwd=workspace,
-                              capture_output=True, text=True, timeout=30)
-        source = os.path.join(workspace, real.stdout.strip()) if real.returncode == 0 else ""
-        if os.path.isfile(source):
-            shutil.copyfile(source, index)
+        def rev(*args):
+            r = subprocess.run(HOST_GIT + ["rev-parse", *args], cwd=workspace, env=host_git_env(),
+                               capture_output=True, text=True, timeout=30)
+            return r.stdout.strip() if r.returncode == 0 else ""
+        common = rev("--path-format=absolute", "--git-common-dir")
+        index_src = rev("--path-format=absolute", "--git-path", "index")
+        if not common or not os.path.isdir(os.path.join(common, "objects")):
+            return None
+        gd = os.path.join(tmp, "gd")
+        os.makedirs(os.path.join(gd, "refs"))
+        os.makedirs(os.path.join(gd, "info"))
+        with open(os.path.join(gd, "HEAD"), "w") as f:
+            f.write("ref: refs/heads/none\n")
+        open(os.path.join(gd, "config"), "w").close()
+        # The ignore rules a normal `git add -A` would apply: the repository's info/exclude and
+        # the user's default global ignore file (an excludesFile set in config is not followed).
+        rules = []
+        for path in (os.path.join(common, "info", "exclude"),
+                     os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                                  "git", "ignore")):
+            if os.path.isfile(path):
+                with open(path, errors="replace") as f:
+                    rules.append(f.read())
+        with open(os.path.join(gd, "info", "exclude"), "w") as f:
+            f.write("\n".join(rules))
+        index = os.path.join(tmp, "index")
+        if index_src and os.path.isfile(index_src):
+            shutil.copyfile(index_src, index)
+        env = host_git_env(GIT_DIR=gd, GIT_WORK_TREE=workspace, GIT_INDEX_FILE=index,
+                           GIT_OBJECT_DIRECTORY=os.path.join(common, "objects"))
         for args in (["add", "-A"], ["write-tree"]):
-            r = subprocess.run(["git", *args], cwd=workspace, env=env,
+            r = subprocess.run(HOST_GIT + args, cwd=workspace, env=env,
                                capture_output=True, text=True, timeout=60)
             if r.returncode:
                 return None
         return r.stdout.strip()
     finally:
-        for leftover in (index, index + ".lock"):
-            if os.path.exists(leftover):
-                os.unlink(leftover)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def takeover_snapshot(workspace, session_id):
@@ -1959,13 +2006,13 @@ def takeover_snapshot(workspace, session_id):
         # it must not depend on git having an identity configured.
         who = {f"GIT_{role}_{field}": value for role in ("AUTHOR", "COMMITTER")
                for field, value in (("NAME", "tandem snapshot"), ("EMAIL", "snapshot@tandem.invalid"))}
-        r = subprocess.run(["git", "commit-tree", tree, "-m", "tandem takeover snapshot"],
-                           cwd=root, env=dict(os.environ, **who), capture_output=True, text=True, timeout=30)
+        r = subprocess.run(HOST_GIT + ["commit-tree", tree, "-m", "tandem takeover snapshot"],
+                           cwd=root, env=host_git_env(**who), capture_output=True, text=True, timeout=30)
         if r.returncode:
             return None
         oid = r.stdout.strip()
         ref = f"refs/tandem/takeover/{session_id}"
-        r = subprocess.run(["git", "update-ref", ref, oid], cwd=root,
+        r = subprocess.run(HOST_GIT + ["update-ref", ref, oid], cwd=root, env=host_git_env(),
                            capture_output=True, text=True, timeout=30)
         return oid if r.returncode == 0 else None
     except (OSError, UnicodeError, subprocess.TimeoutExpired):
@@ -1984,7 +2031,8 @@ def takeover_diff(saved):
         tree = git_tree(root)
         if not tree:
             return None
-        names = subprocess.run(["git", "diff", "--name-only", "-z", oid, tree], cwd=root,
+        names = subprocess.run(HOST_GIT + ["diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z",
+                                           oid, tree], cwd=root, env=host_git_env(),
                                capture_output=True, text=True, errors="replace", timeout=60)
         if names.returncode:
             return None
@@ -1995,10 +2043,11 @@ def takeover_diff(saved):
         hidden = [n for n in changed if policy.is_secret(n)]
         shown = [n for n in changed if n not in hidden]
         results = []
-        for args in (["diff", "--stat", oid, tree, "--"], ["diff", oid, tree, "--"]):
+        for args in (["diff", "--no-ext-diff", "--no-textconv", "--stat", oid, tree, "--"],
+                     ["diff", "--no-ext-diff", "--no-textconv", oid, tree, "--"]):
             if not shown:
                 break
-            r = subprocess.run(["git", *args, *shown], cwd=root, capture_output=True,
+            r = subprocess.run(HOST_GIT + [*args, *shown], cwd=root, env=host_git_env(), capture_output=True,
                                text=True, errors="replace", timeout=60)
             if r.returncode:
                 return None
