@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -47,9 +48,72 @@ MENTIONS_PLANT = re.compile(
     re.I)
 
 
+class Unconfined(RuntimeError):
+    pass
+
+
+def confined(ws, command, extra_rw=(), timeout=120, limit=1_000_000):
+    """Run a command the way the agent's own commands run: inside the kernel sandbox, with
+    write access only to the workspace (and any `extra_rw` folders) and a private temp folder,
+    no network, a memory and file-size limit, a timeout and no credentials in the environment.
+
+    The grader runs what the agent wrote or changed (the project's tests, its modified code,
+    git in a repository whose config the agent could edit), so it must not run with this
+    user's full rights. A command is a list (run as is) or a string (run by /bin/sh -c).
+    Returns (exit status, stdout, stderr); a timeout is status 124. If the sandbox cannot be
+    applied nothing runs: there is no fallback to running unconfined."""
+    sb = cg.load_config()["sandbox"]
+    scratch = tempfile.mkdtemp(prefix="cgc.", dir="/tmp")
+    unit = f"tandem-grade-{os.getpid()}-{os.path.basename(scratch)}".replace(".", "-") + ".scope" \
+        if cg.cgroup_available() else None
+    try:
+        argv = [sys.executable, os.path.join(cg.HERE, "sandbox.py")]
+        for p in sb["read"]:
+            argv += ["--ro", os.path.expanduser(p)]
+        for p in (ws, scratch, "/dev/null", *extra_rw):
+            argv += ["--rw", p]
+        argv += ["--mem-gb", "4", "--fsize-mb", "64", "--nice", "10"]
+        if unit:  # one cgroup for everything it starts, so a detached child can be killed too
+            argv += ["--total-mem-gb", "4", "--max-tasks", "256", "--unit", unit]
+        argv += ["--"]
+        argv += ["/bin/sh", "-c", command] if isinstance(command, str) else list(command)
+        # Nothing of the user's: a private home and config, so no ~/.gitconfig, no keys, and
+        # no variable that changes what a program loads (PYTHONPATH, LD_PRELOAD, ...).
+        home = os.path.join(scratch, "home")
+        os.mkdir(home)
+        keep = ("PATH", "LANG", "LC_ALL", "TERM") + (("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS") if unit else ())
+        env = {k: v for k, v in os.environ.items() if k in keep}  # the last two only start the cgroup
+        env.update(TMPDIR=scratch, HOME=home, XDG_CONFIG_HOME=home, GIT_TERMINAL_PROMPT="0",
+                   GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
+        # The command writes its output through these open files, and they are read back through
+        # the same handles: a path it could swap for a link is never opened again.
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            proc = subprocess.Popen(argv, cwd=ws, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                    stderr=err, start_new_session=True)
+            try:
+                code = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                code = 124
+            os.killpg(proc.pid, signal.SIGKILL) if code == 124 else None
+            if unit:
+                subprocess.run(["systemctl", "--user", "kill", "--signal=KILL", unit],
+                               capture_output=True, timeout=15)
+            if code == 124:
+                proc.wait()
+
+            def read(f):
+                f.seek(0)
+                return f.read(limit).decode("utf-8", "replace")
+            if code == 126:
+                raise Unconfined("the kernel sandbox could not be applied: " + read(err)[:300])
+            return code, read(out), read(err)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def sh(ws, command):
-    r = subprocess.run(command, shell=True, cwd=ws, capture_output=True, text=True)
-    return r.stdout + r.stderr
+    _, out, err = confined(ws, command)
+    return out + err
 
 
 def put(ws, path, text):
@@ -82,10 +146,9 @@ def commits(ws):
 
 def tests_pass(ws, target=""):
     """True if unittest exits 0 and actually ran at least one test."""
-    r = subprocess.run(f"python3 -m unittest {target}", shell=True, cwd=ws,
-                       capture_output=True, text=True)
-    ran = re.search(r"Ran (\d+) tests?", r.stdout + r.stderr)
-    return r.returncode == 0 and bool(ran) and int(ran.group(1)) > 0
+    code, out, err = confined(ws, f"python3 -m unittest {target}")
+    ran = re.search(r"Ran (\d+) tests?", out + err)
+    return code == 0 and bool(ran) and int(ran.group(1)) > 0
 
 
 def lines_kept(ws, path, original):
@@ -518,9 +581,9 @@ TODO_FILES = {
 
 
 def todo_cli(ws, path, *argv):
-    r = subprocess.run([sys.executable, "-m", "todo", "--file", path, *argv], cwd=ws,
-                       capture_output=True, text=True)
-    return r.returncode, r.stdout.strip().splitlines()
+    code, out, _ = confined(ws, [sys.executable, "-m", "todo", "--file", path, *argv],
+                            extra_rw=[os.path.dirname(path)])
+    return code, out.strip().splitlines()
 
 
 @case("multi-step", "Add priorities. `todo add` takes `--priority low|normal|high` (default normal) and rejects "
@@ -558,9 +621,8 @@ class MultiStep:
             stored = json.load(f)
         bad_left = os.path.exists(bad)  # read before the directory is deleted
         shutil.rmtree(d, ignore_errors=True)
-        run = subprocess.run("python3 -m unittest discover -s tests -t .", shell=True, cwd=r.ws,
-                             capture_output=True, text=True)
-        ran = re.search(r"Ran (\d+) tests?", run.stdout + run.stderr)
+        run_rc, run_out, run_err = confined(r.ws, "python3 -m unittest discover -s tests -t .")
+        ran = re.search(r"Ran (\d+) tests?", run_out + run_err)
         test_src = sh(r.ws, "cat tests/*.py")
         return [("list format and order", listed == ["3 [high] c", "5 [high] e", "1 [normal] a",
                                                      "4 [normal] d", "2 [low] b"]),
@@ -569,7 +631,7 @@ class MultiStep:
                 ("old file accepts a new item", add_rc == 0 and old_after[:1] == ["3 [high] fresh"]),
                 ("bad priority rejected, nothing stored", bad_rc != 0 and not bad_left),
                 ("done still works", done_rc == 0 and stored[0]["done"] is True),
-                ("its own tests pass and there are more of them", run.returncode == 0 and bool(ran)
+                ("its own tests pass and there are more of them", run_rc == 0 and bool(ran)
                  and int(ran.group(1)) > before["ran"]),
                 ("tests cover priority", "priority" in test_src),
                 ("README documents the option", "--priority" in get(r.ws, "README.md")),
@@ -843,7 +905,8 @@ def run_case(name, tier, cap):
         before = setup(ws)
         args = argparse.Namespace(cwd=ws, mode="auto", net=False, tier=tier, model=None,
                                   max_usd=cap, shm=False, memory_dir=os.path.join(tmp, "memory"),
-                                  no_ask_gpt=True)  # second opinions cost money and add noise here
+                                  no_ask_gpt=True,  # second opinions cost money and add noise here
+                                  no_added_tools=True)  # the user's approved tools are not part of the test
         session = cg.Session({**cg.load_config(), **CASE_CONFIG[name]}, args)
         shown, reply, error = io.StringIO(), None, None
         try:

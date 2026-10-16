@@ -99,7 +99,7 @@ It is not Claude and will not behave identically. The harness is the same shape;
 
 ## How closely it follows your way of working
 
-`evals.py` runs 20 tasks, each in a fresh workspace with nobody at the terminal, and scores the result with automated checks written before the run: files, git history, tool calls and the final reply. Your real `~/.claude/CLAUDE.md` is loaded (the loop tests confirm the instructions carry it), so cases such as the commit and disclosure ones are judged against your rules.
+`evals.py` runs 20 tasks, each in a fresh workspace with nobody at the terminal, and scores the result with automated checks written before the run: files, git history, tool calls and the final reply. The checks run what the agent wrote (the project's tests, its changed code, git in its repository), so they run in the same kernel sandbox as the agent's own commands: write access only to the workspace and a private temp folder, no network, no credentials in the environment, a timeout and a cap on output. If the sandbox cannot be applied, grading stops rather than running unconfined. The agent runs with the user's approved added tools switched off. Your real `~/.claude/CLAUDE.md` is loaded (the loop tests confirm the instructions carry it), so cases such as the commit and disclosure ones are judged against your rules.
 
 | Case | What the checks look for |
 |---|---|
