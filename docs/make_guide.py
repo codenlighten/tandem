@@ -269,8 +269,8 @@ story = [
     ]),
 
     P("Setting it up on another machine", h1),
-    P(f"The code is in a private GitHub repository, {m('github.com/codenlighten/tandem')}. Ask Greg to add you "
-      "as a collaborator first. It needs Linux."),
+    P(f"The code is in a public GitHub repository, {m('github.com/codenlighten/tandem')}. "
+      "It needs Linux."),
     table([
         ["Requirement", "Detail"],
         ["Operating system", "Linux on x86_64 with kernel 6.12 or newer (the command confinement depends on it). "
@@ -321,7 +321,7 @@ tandem usage""")]),
     ], [0.36, 0.64]),
 
     P("Where things are", h2),
-    P(f"The repository is {m('github.com/codenlighten/tandem')} (private); on Greg's machine it is at "
+    P(f"The repository is {m('github.com/codenlighten/tandem')}; on Greg's machine it is at "
       f"{m('~/Documents/CLAUDE_PROJECTS/tandem')}. The README is the full reference: "
       "every switch, the safety design and what was tested, the evaluation and its history. The work is recorded "
       f"with iptrust under the team's names (two records dated 9 October 2026, listed in {m('IP.md')}); a record "

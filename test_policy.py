@@ -57,7 +57,7 @@ MUST_DENY = [
     "find / -name '*.log' -delete",
     "chmod -R 777 /home/user",
     "reboot",
-    "git -c user.name=codenlighten -c user.email=greg@example.com commit -m x",
+    "git -c user.name=octocat -c user.email=greg@example.com commit -m x",
     "git commit --author='A <a@b.c>' -m x",
     "git config user.email someone@example.com",
     "git config --global user.name Someone",

@@ -1,6 +1,6 @@
 {
  "name": "github",
- "description": "GitHub as the user's account codenlighten, for repositories it owns. action status: the accounts, the repository, and with branch, what a push would send (read only). push: send one local branch to the workspace's GitHub remote; fast-forward only, refused if a commit credits an AI. pull_request: open one from a pushed branch (branch, title, body, optional base). list_pull_requests: the latest 20. remote names the git remote (default origin). Push or open a pull request only when the user asks; run status first.",
+ "description": "GitHub as the account the user configured, for repositories it owns. action status: the accounts, the repository, and with branch, what a push would send (read only). push: send one local branch to the workspace's GitHub remote; fast-forward only, refused if a commit credits an AI. pull_request: open one from a pushed branch (branch, title, body, optional base). list_pull_requests: the latest 20. remote names the git remote (default origin). Push or open a pull request only when the user asks; run status first.",
  "parameters": {"type": "object", "required": ["action"], "properties": {
   "action": {"type": "string", "enum": ["status", "push", "pull_request", "list_pull_requests"]},
   "branch": {"type": "string"},

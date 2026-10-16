@@ -11,8 +11,8 @@ object on stdin and prints its result:
 
 `remote` (default origin) names the git remote whose URL gives the repository.
 
-What it refuses: an account other than ACCOUNT, in gh or in ssh; a repository not owned
-by one of OWNERS; anything but a fast-forward; commits, identities or pull-request text
+What it refuses: an account other than the configured one (see account()), in gh or in ssh; a repository not owned
+by that account; anything but a fast-forward; commits, identities or pull-request text
 that credit an AI.
 
 The workspace is the model's to edit, including .git/config, which can name programs for
@@ -32,8 +32,8 @@ import subprocess
 import sys
 import tempfile
 
-ACCOUNT = "codenlighten"
-OWNERS = {"codenlighten"}
+ACCOUNT_FILE = os.path.expanduser("~/.config/tandem/github_account")
+ACCOUNT_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 
 URL = re.compile(r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
                  r"([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$")
@@ -108,9 +108,23 @@ def repository(workspace, remote, tmp):
     if not m:
         raise Refused(f"remote {remote!r} is not a GitHub repository: {url}")
     owner, name = m.groups()
-    if owner not in OWNERS:
-        raise Refused(f"{owner}/{name} is not owned by {', '.join(sorted(OWNERS))}")
+    if owner != account():
+        raise Refused(f"{owner}/{name} is not owned by {account()}")
     return owner, name
+
+
+def account():
+    """The one GitHub account this tool acts as: TANDEM_GITHUB_ACCOUNT, or the first line of
+    ~/.config/tandem/github_account. Both are outside every root a session can write, so the
+    model cannot change who the tool pushes as. There is no default."""
+    name = os.environ.get("TANDEM_GITHUB_ACCOUNT", "").strip()
+    if not name and os.path.isfile(ACCOUNT_FILE):
+        with open(ACCOUNT_FILE) as f:
+            name = f.readline().strip()
+    if not ACCOUNT_RE.match(name):
+        raise Refused("no GitHub account is set: put your login in ~/.config/tandem/github_account "
+                      "(or TANDEM_GITHUB_ACCOUNT)")
+    return name
 
 
 def logins():
@@ -124,9 +138,10 @@ def logins():
 
 
 def require_account():
+    want = account()
     gh, ssh = logins()
-    if gh != ACCOUNT or ssh != ACCOUNT:
-        raise Refused(f"GitHub must be {ACCOUNT} in both gh and ssh; gh is {gh or 'not signed in'}, "
+    if gh != want or ssh != want:
+        raise Refused(f"GitHub must be {want} in both gh and ssh; gh is {gh or 'not signed in'}, "
                       f"ssh is {ssh or 'not recognised'}")
 
 
@@ -214,7 +229,7 @@ class Plan:
 def status(workspace, a, tmp):
     gh, ssh = logins()
     out = [f"gh account: {gh or 'not signed in'}; ssh account: {ssh or 'not recognised'}; "
-           f"required: {ACCOUNT}"]
+           f"required: {account()}"]
     owner, name = repository(workspace, a.get("remote", "origin"), tmp)
     out.append(f"repository: {owner}/{name}")
     if a.get("branch"):

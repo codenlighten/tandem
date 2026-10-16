@@ -17,11 +17,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("github_tool", os.path.join(HERE, "tools", "github.py"))
 gt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gt)
+REAL_ACCOUNT = gt.account
 
 FAKE_GH = """#!/bin/sh
 printf '%s\\n' "$@" >> "$FAKE_GH_LOG"
 case "$1 $2" in
-  "pr create") echo https://github.com/codenlighten/demo/pull/7 ;;
+  "pr create") echo https://github.com/octocat/demo/pull/7 ;;
   "pr list") echo '[{"number":7,"title":"t","state":"OPEN","headRefName":"b","baseRefName":"main","url":"u"}]' ;;
 esac
 """
@@ -29,9 +30,9 @@ esac
 
 def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
-                          env={**os.environ, "GIT_AUTHOR_NAME": "codenlighten",
+                          env={**os.environ, "GIT_AUTHOR_NAME": "octocat",
                                "GIT_AUTHOR_EMAIL": "greg@smartledger.technology",
-                               "GIT_COMMITTER_NAME": "codenlighten",
+                               "GIT_COMMITTER_NAME": "octocat",
                                "GIT_COMMITTER_EMAIL": "greg@smartledger.technology"}).stdout.strip()
 
 
@@ -43,7 +44,7 @@ class GitHubTool(unittest.TestCase):
         git(t, "init", "-q", "--bare", "-b", "main", self.hub)
         self.ws = os.path.join(t, "ws")
         git(t, "init", "-q", "-b", "main", self.ws)
-        git(self.ws, "remote", "add", "origin", "git@github.com:codenlighten/demo.git")
+        git(self.ws, "remote", "add", "origin", "git@github.com:octocat/demo.git")
         self.commit("a.txt", "one\n", "First")
         bin_dir = os.path.join(t, "bin")
         os.makedirs(bin_dir)
@@ -55,7 +56,8 @@ class GitHubTool(unittest.TestCase):
         for p in (mock.patch.dict(os.environ, {"PATH": bin_dir + os.pathsep + os.environ["PATH"],
                                                "FAKE_GH_LOG": self.gh_log}),
                   mock.patch.object(gt, "ssh_url", lambda owner, name: self.hub),
-                  mock.patch.object(gt, "logins", lambda: ("codenlighten", "codenlighten"))):
+                  mock.patch.object(gt, "logins", lambda: ("octocat", "octocat")),
+                  mock.patch.object(gt, "account", lambda: "octocat")):
             p.start()
             self.addCleanup(p.stop)
 
@@ -98,7 +100,7 @@ class GitHubTool(unittest.TestCase):
     def test_status_shows_what_would_go_and_sends_nothing(self):
         code, out = self.call(action="status", branch="main")
         self.assertEqual(code, 0, out)
-        self.assertIn("codenlighten/demo", out)
+        self.assertIn("octocat/demo", out)
         self.assertIn("1 new commits", out)
         self.assertIn("First", out)
         self.assertIsNone(self.on_hub())
@@ -150,20 +152,29 @@ class GitHubTool(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_only_the_owners_repositories(self):
-        for url in ("git@github.com:smartledger/demo.git", "https://gitlab.com/codenlighten/demo",
-                    "/tmp/elsewhere.git", "git@github.com:codenlighten-x/demo.git"):
+        for url in ("git@github.com:smartledger/demo.git", "https://gitlab.com/octocat/demo",
+                    "/tmp/elsewhere.git", "git@github.com:octocat-x/demo.git"):
             with self.subTest(url=url):
                 git(self.ws, "remote", "set-url", "origin", url)
                 code, out = self.call(action="push", branch="main")
                 self.assertEqual(code, 1, out)
         self.assertIsNone(self.on_hub())
 
+    def test_no_account_set_is_refused(self):
+        with mock.patch.object(gt, "account", REAL_ACCOUNT), \
+                mock.patch.dict(os.environ, {"TANDEM_GITHUB_ACCOUNT": ""}), \
+                mock.patch.object(gt, "ACCOUNT_FILE", "/nonexistent/github_account"):
+            code, out = self.call(action="push", branch="main")
+        self.assertEqual(code, 1)
+        self.assertIn("no GitHub account is set", out)
+        self.assertIsNone(self.on_hub())
+
     def test_only_the_account(self):
-        for logins in (("someone", "codenlighten"), ("codenlighten", "someone"), (None, None)):
+        for logins in (("someone", "octocat"), ("octocat", "someone"), (None, None)):
             with self.subTest(logins=logins), mock.patch.object(gt, "logins", lambda: logins):
                 code, out = self.call(action="push", branch="main")
                 self.assertEqual(code, 1)
-                self.assertIn("must be codenlighten", out)
+                self.assertIn("must be octocat", out)
         self.assertIsNone(self.on_hub())
 
     def test_the_workspace_config_runs_nothing(self):
@@ -180,7 +191,7 @@ class GitHubTool(unittest.TestCase):
                     "core.alternateRefsCommand", "remote.origin.uploadpack",
                     "remote.origin.receivepack", "credential.helper", "core.pager"):
             git(self.ws, "config", key, script)
-        git(self.ws, "config", "url./tmp/elsewhere.git.insteadOf", "git@github.com:codenlighten/demo.git")
+        git(self.ws, "config", "url./tmp/elsewhere.git.insteadOf", "git@github.com:octocat/demo.git")
         # an alternate, so that core.alternateRefsCommand has something to be asked about
         other = os.path.join(self.tmp.name, "other")
         git(self.tmp.name, "init", "-q", other)
@@ -220,7 +231,7 @@ class GitHubTool(unittest.TestCase):
         self.assertIn("pull/7", out)
         with open(self.gh_log) as f:
             sent = f.read().splitlines()
-        self.assertEqual(sent[sent.index("--repo") + 1], "codenlighten/demo")
+        self.assertEqual(sent[sent.index("--repo") + 1], "octocat/demo")
         code, out = self.call(action="list_pull_requests")
         self.assertIn("#7 [OPEN]", out)
 
