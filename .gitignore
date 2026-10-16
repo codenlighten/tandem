@@ -4,3 +4,4 @@ runs/
 __pycache__/
 ledger-extra.jsonl
 ledger.jsonl.*
+.iptrust/
