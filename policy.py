@@ -283,7 +283,12 @@ def _check_segment(seg, depth):
 
     # A few read-only tools can be told to write a file; then they are ordinary commands.
     writes_file = any(a == "-o" or a.startswith("--output") for a in args) or (
-        name == "uniq" and len([a for a in args if not a.startswith("-")]) > 1)
+        name == "uniq" and len([a for a in args if not a.startswith("-")]) > 1) or (
+        # sort -ofile and -uo file (the option bundled with others); a program it is told to run
+        name == "sort" and any(re.match(r"^-[A-Za-z]*o", a) or a.startswith("--compress-program")
+                               for a in args)) or (
+        # rg --pre CMD runs CMD on every file it searches
+        name in ("rg", "grep", "egrep", "fgrep") and any(a.startswith("--pre") for a in args))
     if name in READONLY:
         return ("allow" if writes_file else "readonly"), None
     if two == "git config":
@@ -299,7 +304,7 @@ def _check_segment(seg, depth):
         if writes_file:
             return "allow", None
         return "readonly", None
-    if name == "find" and not any(a in ("-delete", "-exec", "-execdir", "-ok") or
+    if name == "find" and not any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls") or
                                   a.startswith("-fprint") for a in args):
         return "readonly", None
     return "allow", None
@@ -366,9 +371,17 @@ def planted_instruction(text):
 
 SECRET_ENV = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|AUTH|COOKIE|SESSION", re.I)
 DROP_ENV = {"DOCKER_HOST", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO",
-            "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"}
+            "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY",
+            # Run code before or alongside the program asked for: a poisoned environment is a
+            # way to get something to start that nobody typed.
+            "LD_PRELOAD", "LD_AUDIT", "BASH_ENV", "ENV", "PROMPT_COMMAND", "PYTHONSTARTUP",
+            "NODE_OPTIONS", "PERL5OPT", "RUBYOPT", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF"}
+# A connection string with a password in it (DATABASE_URL=postgres://user:pw@host/db) is a
+# secret whatever the variable is called.
+CREDENTIAL_VALUE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@]*:[^/\s@]+@")
 
 
 def scrub_env(env):
     """The environment a command runs with: the caller's, minus anything secret."""
-    return {k: v for k, v in env.items() if k not in DROP_ENV and not SECRET_ENV.search(k)}
+    return {k: v for k, v in env.items() if k not in DROP_ENV and not SECRET_ENV.search(k)
+            and not CREDENTIAL_VALUE.search(v)}

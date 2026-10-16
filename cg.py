@@ -461,6 +461,25 @@ def broad_root(path):
     return real.count("/") <= 1 or real == HOME or HOME.startswith(real.rstrip("/") + "/")
 
 
+def refuse_harness_writes(write_roots, allowed=False):
+    """The sandbox launcher is started by the harness before any restriction applies, and the
+    ledger and saved sessions decide what a session may spend: a session that can write them
+    can change what runs next, outside its own restrictions. So no session starts with the
+    harness's code or state folder inside what it may write; work on tandem itself from a
+    separate checkout (a git worktree), with the installed copy as the harness."""
+    for what, path in (("code (including the sandbox launcher)", HERE), ("state (ledger, sessions)", STATE)):
+        real = os.path.realpath(path)
+        for root in write_roots:
+            if policy.inside(real, os.path.realpath(root)):
+                msg = (f"this session could write the harness's own {what}, {real}, which is read "
+                       "or run outside the sandbox")
+                if allowed:
+                    say(f"tandem: warning: {msg} (--allow-harness-writes)")
+                    return
+                sys.exit(f"tandem: {msg}. Work on it from a separate checkout (git worktree) and run "
+                         "the installed copy, or pass --allow-harness-writes to accept the risk.")
+
+
 def automatic_read_roots(workspace, names):
     """Directories outside the workspace that links named in the config ("node_modules", a
     venv) lead to, so the project's own tests can run. A link in a repository is data an agent
@@ -716,6 +735,7 @@ class Session:
         self.write_roots = [self.workspace, self.scratch]
         if cfg.get("memory_writable"):
             self.write_roots.append(self.memory)
+        refuse_harness_writes(self.write_roots, getattr(args, "allow_harness_writes", False))
         self.read_roots = [self.memory, os.path.join(HOME, ".claude", "skills"),
                            os.path.join(HOME, ".claude", "CLAUDE.md")] + skill_dirs
         # Dependencies kept outside the workspace and linked in (a shared node_modules, a venv
@@ -2642,9 +2662,11 @@ def run_task(args, cfg):
     status = 0
     try:
         if args.from_claude or args.claude_session:
-            take_over(s, args.claude_session or "latest", then=args.task or "")
+            reply = take_over(s, args.claude_session or "latest", then=args.task or "")
         else:
-            s.turn(args.task)
+            reply = s.turn(args.task)
+        if reply is None:  # the step limit, a refused budget or a takeover that did not start
+            status = 1
     except KeyboardInterrupt:
         say("\n  (interrupted)")
         status = 130
@@ -2772,6 +2794,9 @@ def main():
         p.add_argument("--read", action="append", metavar="PATH",
                        help="also let the session read PATH (repeatable), e.g. dependencies or a tool "
                             "kept outside the project")
+        p.add_argument("--allow-harness-writes", action="store_true",
+                       help="start even though the session could write the harness's own code or "
+                            "state (the sandbox launcher, the ledger); see Safety")
         p.add_argument("--shm", action="store_true",
                        help="let bash use /dev/shm (needed for Python multiprocessing; it is "
                             "shared with every other process of yours)")
