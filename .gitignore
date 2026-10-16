@@ -1,0 +1,6 @@
+.env
+ledger.jsonl
+runs/
+__pycache__/
+ledger-extra.jsonl
+ledger.jsonl.*

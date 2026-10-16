@@ -1,0 +1,104 @@
+{
+  "default_tier": "standard",
+  "per_run_cap_usd": 1.0,
+  "daily_budget_usd": 10.0,
+  "account_daily_budget_usd": 10.0,
+  "account_reserve_usd": 1.0,
+  "other_ledgers": [
+    "~/Documents/CLAUDE_PROJECTS/gpt-assist/ledger.jsonl",
+    "~/Documents/CLAUDE_PROJECTS/gpt-notes/ledger.jsonl"
+  ],
+  "max_steps_per_turn": 200,
+  "max_tool_output_chars": 30000,
+  "compact_at_input_tokens": 120000,
+  "bash_timeout_s": 120,
+  "bash_timeout_max_s": 600,
+  "memory_writable": false,
+  "other_claude": {"where": "the ASUS (the second Claude account)", "how": "ssh asus, then run: claude"},
+  "gpt_assist": "~/Documents/CLAUDE_PROJECTS/gpt-assist/assist.py",
+  "sandbox": {
+    "read": [
+      "/usr",
+      "/bin",
+      "/sbin",
+      "/lib",
+      "/lib32",
+      "/lib64",
+      "/etc",
+      "/opt",
+      "/snap",
+      "/proc",
+      "/run/systemd/resolve",
+      "/sys/devices/system/cpu",
+      "/dev/zero",
+      "/dev/urandom",
+      "/dev/random",
+      "~/.local/bin",
+      "~/.local/lib",
+      "~/.local/include",
+      "~/.local/share/uv",
+      "~/.local/share/pnpm",
+      "~/.cargo/bin",
+      "~/.cargo/registry",
+      "~/.rustup",
+      "~/.nvm",
+      "~/.pyenv",
+      "~/.gitconfig",
+      "~/.config/git"
+    ],
+    "write": [
+      "/dev/null"
+    ],
+    "net_tcp_ports": [
+      80,
+      443
+    ],
+    "allow_unix_sockets": false,
+    "mem_gb": 8,
+    "max_file_mb": 1024,
+    "nice": 19,
+    "total_mem_gb": 8,
+    "max_tasks": 512,
+    "linked_dirs": [
+      "node_modules",
+      ".venv",
+      "venv",
+      "vendor"
+    ]
+  },
+  "tiers": {
+    "quick": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "max_output_tokens": 6000
+    },
+    "standard": {
+      "model": "gpt-6-sol",
+      "effort": "medium",
+      "max_output_tokens": 12000
+    },
+    "deep": {
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "max_output_tokens": 20000
+    }
+  },
+  "prices_note": "USD per 1M tokens, standard tier, copied from gpt-assist/config.json (developers.openai.com/api/docs/pricing on 2026-09-23)",
+  "prices": {
+    "gpt-6-astra": {
+      "input": 10.0,
+      "cached": 1.0,
+      "output": 50.0
+    },
+    "gpt-6-sol": {
+      "input": 2.0,
+      "cached": 0.2,
+      "output": 10.0
+    },
+    "gpt-6-luna": {
+      "input": 0.1,
+      "cached": 0.01,
+      "output": 0.5
+    }
+  }
+}
